@@ -55,6 +55,12 @@ class Hub(SPCommunicator):
         pass
 
     @abc.abstractmethod
+    def current_iteration(self):
+        """ Returns the current iteration count - however the hub defines it.
+        """
+        pass
+
+    @abc.abstractmethod
     def main(self):
         pass
 
@@ -98,23 +104,22 @@ class Hub(SPCommunicator):
             return '  ' + self.latest_ib_char
         return self.latest_ob_char+' '+self.latest_ib_char
 
-    def log_output(self):
-        if self.rank_global != 0:
-            return
+    def screen_trace(self):
+        current_iteration = self.current_iteration()
         rel_gap = self.compute_gap(compute_relative=True)
         abs_gap = self.compute_gap(compute_relative=False)
         best_solution = self.BestInnerBound
         best_bound = self.BestOuterBound
         update_source = self.get_update_string()
         if self.print_init:
-            row = f'{"   "} {"Best Bound":>14s} {"Best Incumbent":>14s} {"Rel. Gap (%)":>12s} {"Abs. Gap":>14s}'
+            row = f'{"Iter.":>5s}  {"   "}  {"Best Bound":>14s}  {"Best Incumbent":>14s}  {"Rel. Gap":>12s}  {"Abs. Gap":>14s}'
             tt_timer.toc(row, delta=False)
             self.print_init = False
-        row = f"{update_source} {best_bound:14.4f} {best_solution:14.4f} {rel_gap*100:12.4f} {abs_gap:14.4f}"
+        row = f"{current_iteration:5d}  {update_source}  {best_bound:14.4f}  {best_solution:14.4f}  {rel_gap*100:12.4f}  {abs_gap:14.4f}"
         tt_timer.toc(row, delta=False)
         self.clear_latest_chars()
 
-    def log_and_determine_termination(self):
+    def determine_termination(self):
         abs_gap_satisfied = False
         rel_gap_satisfied = False
         if hasattr(self,"options") and self.options is not None:
@@ -136,8 +141,11 @@ class Hub(SPCommunicator):
         if self.has_innerbound_spokes:
             self.receive_innerbounds()
 
-        self.print_init = True
-        self.log_output()
+        if self.rank_global == 0:
+            self.print_init = True
+            tt_timer.toc(f" ", delta=False)
+            tt_timer.toc(f"Statistics at termination", delta=False)
+            self.screen_trace()
 
     def receive_innerbounds(self):
         """ Get inner bounds from inner bound spokes
@@ -431,6 +439,11 @@ class PHHub(Hub):
                     "PHHub cannot compute convergence without "
                     "inner bound spokes."
                 )
+
+            ## you still want to output status, even without inner bounders configured
+            if self.rank_global == 0:                
+                self.screen_trace()
+                
             return False
 
         if not self.has_outerbound_spokes:
@@ -440,10 +453,15 @@ class PHHub(Hub):
                     "will be made on the Best Bound", delta=False)
 
         ## log some output
-        self.log_output()
+        if self.rank_global == 0:
+            self.screen_trace()
 
-        return self.log_and_determine_termination()
+        return self.determine_termination()
 
+    def current_iteration(self):
+        """ Return the current PH iteration."""
+        return self.opt._PHIter
+    
     def main(self):
         """ SPComm gets attached in self.__init__ """
         self.opt.ph_main(finalize=False)
@@ -553,9 +571,14 @@ class LShapedHub(Hub):
         self.BestOuterBound = self.OuterBoundUpdate(bound)
 
         ## log some output
-        self.log_output()
+        if self.rank_global == 0:                
+            self.screen_trace()
 
-        return self.log_and_determine_termination()
+        return self.determine_termination()
+
+    def current_iteration(self):
+        """ Return the current L-shaped iteration."""
+        return self.opt.iter
 
     def main(self):
         """ SPComm gets attached in self.__init__ """ 
@@ -644,6 +667,9 @@ class APHHub(PHHub):
     def sync_with_spokes(self):
         self.sync()
 
+    def current_iteration(self):
+        """ Return the current APH iteration."""
+        return self.opt._PHIter
 
     def main(self):
         """ SPComm gets attached by self.__init___; holding APH harmless """
