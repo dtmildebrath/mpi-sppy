@@ -6,8 +6,13 @@ import pyomo.environ as pyo
 import re
 import time
 from numpy import prod
+import mpisppy.scenario_tree as scenario_tree
 
-from mpi4py import MPI
+try:
+    from mpi4py import MPI
+    haveMPI = True
+except:
+    haveMPI = False
 from pyomo.pysp.phutils import find_active_objective
 from pyomo.core.expr.numeric_expr import LinearExpression
 
@@ -27,6 +32,8 @@ def spin_the_wheel(hub_dict, list_of_spoke_dict, comm_world=None):
     NOTE: the return is after termination; the objects are provided for query.
 
     """
+    if not haveMPI:
+        raise RuntimeError("spin_the_wheel called, but cannot import mpi4py")
     # Confirm that the provided dictionaries specifying
     # the hubs and spokes contain the appropriate keys
     if "hub_class" not in hub_dict:
@@ -126,6 +133,8 @@ def spin_the_wheel(hub_dict, list_of_spoke_dict, comm_world=None):
 def make_comms(n_spokes, fullcomm=None):
     """ Create the intercomm and intracomm for hub/spoke style runs
     """
+    if not haveMPI:
+        raise RuntimeError("make_comms called, but cannot import mpi4py")
     # Ensure that the proper number of processes have been invoked
     nsp1 = n_spokes + 1 # Add 1 for the hub
     if fullcomm is None:
@@ -158,24 +167,28 @@ def get_objs(scenario_instance):
 
 def create_EF(scenario_names, scenario_creator, creator_options=None,
               EF_name=None, suppress_warnings=False):
-    """ Create a ConcreteModel of the extensive form
+    """ Create a ConcreteModel of the extensive form.
 
         Args:
-            scenario_names (list of str): Names for each scenario, to be passed
-                to the scenario_creator function.
-            scenario_creator (callable): Function which takes a scenario name
-                as its first argument and returns a concrete model
-                corresponding to that scenario.
-            creator_options (dict--optional): options to be passed when
-                scenario_creator is called.
-            EF_name (str--optional): name of the ConcreteModel of the EF.
-            suppress_warnings (boolean): don't warn about things
+            scenario_names (list of str):
+                Names for each scenario to be passed to the scenario_creator
+                function.
+            scenario_creator (callable):
+                Function which takes a scenario name as its first argument and
+                returns a concrete model corresponding to that scenario.
+            creator_options (dict, optional):
+                Options to pass to `scenario_creator`.
+            EF_name (str, optional):
+                Name of the ConcreteModel of the EF.
+            suppress_warnings (boolean, optional):
+                If true, do not display warnings. Default False.
 
         Returns:
-            EF_instance (ConcreteModel): ConcreteModel of extensive form with
-                explicit non-anticipativity constraints.
+            EF_instance (ConcreteModel):
+                ConcreteModel of extensive form with explicit
+                non-anticipativity constraints.
 
-        Notes:
+        Note:
             If any of the scenarios produced by scenario_creator do not have a
             .PySP_prob attribute, this function displays a warning, and assumes
             that all scenarios are equally likely.
@@ -504,6 +517,8 @@ def scens_to_ranks(scen_count, n_proc, rank, BFs = None):
                 that are scenario names and values that are ranks
 
     """
+    if not haveMPI:
+        raise RuntimeError("scens_to_ranks called, but cannot import mpi4py")
     if scen_count < n_proc:
         raise RuntimeError(
             "More MPI ranks (%d) supplied than needed given the number of scenarios (%d) "
@@ -629,6 +644,26 @@ class _ScenTree():
                 FirstRank[nd.name] = FirstRank[firstchild.name]
 
         return retval, masterslices, FirstRank
+
+    
+######## Utility to attach the one and only node to a two-stage scenario #######
+def attach_root_node(model, firstobj, varlist, nonant_ef_suppl_list=None):
+    """ Create a root node as a list to attach to a scenario model
+    Args:
+        model (ConcreteModel): model to which this will be attached
+        firstobj (Pyomo Expression): First stage cost (e.g. model.FC)
+        varlist (list): Pyomo Vars in first stage (e.g. [model.A, model.B])
+        nonant_ef_suppl_list (list of pyo Var, Vardata or slices):
+              vars for which nonanticipativity constraints tighten the EF
+              (important for bundling)
+
+    Note: 
+       attaches a list consisting of one scenario node to the model
+    """
+    model._PySPnode_list = [
+        scenario_tree.ScenarioNode("ROOT",1.0,1,firstobj, None, varlist, model,
+                                   nonant_ef_suppl_list = nonant_ef_suppl_list)
+    ]
 
 """
 if __name__ == "__main__":
